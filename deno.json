@@ -8,5 +8,11 @@
     "useTabs": false
   },
   "name": "@gw31415/commitgen",
-  "exports": "./index.ts"
+  "exports": "./index.ts",
+  "imports": {
+    "@cross/utils": "jsr:@cross/utils@^0.16.0",
+    "@openai/openai": "jsr:@openai/openai@^5.7.0",
+    "ajv": "npm:ajv@^8.17.1",
+    "tiktoken": "npm:tiktoken@^1.0.21"
+  }
 }

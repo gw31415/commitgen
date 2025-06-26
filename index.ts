@@ -1,7 +1,7 @@
-import OpenAI from "jsr:@openai/openai";
-import Ajv, { type JSONSchemaType } from "npm:ajv";
-import { encoding_for_model, type TiktokenModel } from "npm:tiktoken";
-import { spawn } from "jsr:@cross/utils";
+import OpenAI from "@openai/openai";
+import Ajv, { type JSONSchemaType } from "ajv";
+import { encoding_for_model, type TiktokenModel } from "tiktoken";
+import { spawn } from "@cross/utils";
 
 const conventionalCommitTypes = [
   "feat",
