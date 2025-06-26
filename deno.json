@@ -1,5 +1,6 @@
 {
   "$schema": "https://deno.land/x/deno/cli/schemas/config-file.v1.json",
+  "version": "0.1.0",
   "fmt": {
     "indentWidth": 2,
     "semiColons": true,
