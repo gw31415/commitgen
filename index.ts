@@ -98,6 +98,34 @@ const inlineDiffTokenLimit = 4096;
 const requestDiffSizeLimit = 1024 * 1024; // 1 MB
 
 /**
+ * Retrieves the staged git diff for the current working directory.
+ *
+ * Executes 'git diff --cached --ignore-all-space' to obtain the diff of staged changes.
+ * Returns null if there are no staged changes (other than whitespace).
+ * Throws an error if git is not accessible or the command fails.
+ *
+ * @param {string} cwd - The current working directory where git commands are executed.
+ * @returns {Promise<string | null>} - A promise that resolves to the staged diff as a string, or null if no staged changes are found.
+ * @throws {Error} - Throws if git execution fails.
+ */
+export async function getStagedDiff(cwd: string): Promise<string | null> {
+  const { stdout: diff, code } = await spawn(
+    ["git", "diff", "--cached", "--ignore-all-space"],
+    undefined,
+    cwd,
+  ).catch(() => ({ stdout: null, code: 127 } as const));
+  if (code !== 0) {
+    throw new Error(
+      "Execution of git failed. Ensure you have access to git in your PATH and that you are in a git repository.",
+    );
+  }
+  if (!diff.trim()) {
+    return null;
+  }
+  return diff;
+}
+
+/**
  * Generates commit message candidates based on the staged git diff using OpenAI's API.
  * Handles large diffs by uploading them to a vector store if necessary.
  * Validates the output against a JSON schema and cleans up temporary resources.
@@ -121,22 +149,8 @@ export async function commitgen(
   }
 
   // Get staged diff
-  const { stdout: diff, code } = await spawn(
-    [
-      "git",
-      "diff",
-      "--cached",
-      "--ignore-all-space",
-    ],
-    undefined,
-    options.cwd,
-  ).catch(() => ({ stdout: null, code: 127 } as const));
-  if (code !== 0) {
-    throw new Error(
-      "Execution of git failed. Ensure you have access to git in your PATH and that you are in a git repository.",
-    );
-  }
-  if (!diff.trim()) {
+  const diff = await getStagedDiff(options.cwd);
+  if (!diff) {
     throw new Error(
       "No staged changes other than whitespace found. Have you only formatted the code?",
     );
