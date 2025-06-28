@@ -1,4 +1,5 @@
 # `@gw31415/commitgen`
+
 [![JSR](https://jsr.io/badges/@gw31415/commitgen)](https://jsr.io/@gw31415/commitgen)
 
 Generate high-quality Conventional Commit messages for your staged git changes
