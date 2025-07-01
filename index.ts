@@ -48,9 +48,9 @@ interface Attachments {
   fileId: string;
 }
 
-const commitMessagesSchema: (c: number) => JSONSchemaType<CommitMessage[]> = (
-  count,
-) => ({
+const DEFAULT_MAX_CHAR_COUNT = 40;
+
+const commitMessagesSchema = ({count, maxCharCount}: {count: number, maxCharCount: number}): JSONSchemaType<CommitMessage[]> => ({
   type: "array",
   items: {
     type: "object",
@@ -58,7 +58,8 @@ const commitMessagesSchema: (c: number) => JSONSchemaType<CommitMessage[]> = (
       commitMsgContent: {
         type: "string",
         description:
-          "Commit message content, without the Conventional Commit type tag.",
+          `Commit message content, without the Conventional Commit type tag. Max ${maxCharCount} characters.`,
+        maxLength: maxCharCount,
       },
       conventionalCommitType: {
         type: "string",
@@ -92,6 +93,10 @@ export interface CommitgenOptions {
    * Optional API key for OpenAI authentication.
    */
   apiKey?: string;
+  /**
+   * The maximum character count for each commit message (default: 40).
+   */
+  maxCharCount?: number;
 }
 
 const inlineDiffTokenLimit = 4096;
@@ -138,6 +143,7 @@ export async function commitgen(
   options: CommitgenOptions,
 ): Promise<CommitMessage[]> {
   const model = options.model;
+  const maxCharCount = options.maxCharCount ?? DEFAULT_MAX_CHAR_COUNT;
 
   function countTokens(text: string): number {
     const enc = encoding_for_model(model);
@@ -219,7 +225,8 @@ export async function commitgen(
     // Call Responses API with file_search tool
     const instructions =
       `You are a commit message generator. Given the given diff.txt, propose commit message candidates as function calls.\n` +
-      "Each commit message MUST represent the COMPLETE of diff.txt by itself. It is not acceptable to mention only part of the change.";
+      `Each commit message MUST represent the COMPLETE of diff.txt by itself. It is not acceptable to mention only part of the change.\n` +
+      `Each commit message MUST be no more than ${maxCharCount} characters (excluding the Conventional Commit type tag).`;
 
     const tools: OpenAI.Responses.Tool[] = attachments
       ? [{
@@ -232,11 +239,11 @@ export async function commitgen(
         type: "function",
         name: "propose_commit_message",
         description:
-          "Propose commit messages for a git diff, separating the conventional commit type and the message content.",
+          `Propose commit messages for a git diff, separating the conventional commit type and the message content. Each message must be no more than ${maxCharCount} characters (excluding the Conventional Commit type tag).`,
         parameters: {
           type: "object",
           properties: {
-            args: commitMessagesSchema(options.count),
+            args: commitMessagesSchema({count: options.count, maxCharCount}),
           },
           required: ["args"],
           additionalProperties: false,
@@ -263,7 +270,7 @@ export async function commitgen(
 
     // Validate output
     const ajv = new Ajv.default();
-    const validate = ajv.compile(commitMessagesSchema(options.count));
+    const validate = ajv.compile(commitMessagesSchema({count: options.count, maxCharCount}));
     if (!validate(output)) {
       throw new Error(
         "OpenAI response did not match schema: " +
