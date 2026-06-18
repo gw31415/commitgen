@@ -50,7 +50,9 @@ interface Attachments {
 
 const DEFAULT_MAX_CHAR_COUNT = 40;
 
-const commitMessagesSchema = ({count, maxCharCount}: {count: number, maxCharCount: number}): JSONSchemaType<CommitMessage[]> => ({
+const commitMessagesSchema = (
+  { count, maxCharCount }: { count: number; maxCharCount: number },
+): JSONSchemaType<CommitMessage[]> => ({
   type: "array",
   items: {
     type: "object",
@@ -86,13 +88,29 @@ export interface CommitgenOptions {
    */
   cwd: string;
   /**
-   * The model to use for tokenization and OpenAI responses.
+   * The model to use for commit message generation.
+   *
+   * When `baseURL` is NOT set: must be an OpenAI Responses-compatible model
+   * (e.g. "gpt-4o"). Tokenization uses tiktoken.
+   *
+   * When `baseURL` IS set: any model name supported by the target provider
+   * (e.g. "anthropic/claude-sonnet-4" for OpenRouter).
    */
-  model: TiktokenModel & OpenAI.ResponsesModel;
+  model: string;
   /**
-   * Optional API key for OpenAI authentication.
+   * Optional API key for authentication.
    */
   apiKey?: string;
+  /**
+   * Base URL for an OpenAI-compatible API endpoint.
+   *
+   * When set, the Chat Completions API is used instead of the Responses API,
+   * enabling support for providers like OpenRouter that do not implement the
+   * Responses API. Large diffs are sent inline (no vector store / file upload).
+   *
+   * Example: "https://openrouter.ai/api/v1"
+   */
+  baseURL?: string;
   /**
    * The maximum character count for each commit message (default: 40).
    */
@@ -131,19 +149,36 @@ export async function getStagedDiff(cwd: string): Promise<string | null> {
 }
 
 /**
- * Generates commit message candidates based on the staged git diff using OpenAI's API.
- * Handles large diffs by uploading them to a vector store if necessary.
- * Validates the output against a JSON schema and cleans up temporary resources.
- *
- * @param {CommitgenOptions} options - The options for commit message generation.
- * @returns {Promise<CommitMessage[]>} - A promise that resolves to an array of commit message candidates.
- * @throws {Error} - Throws if there are no staged changes, the diff is too large, or the OpenAI response is invalid.
+ * Validates commit message candidates against the JSON schema.
  */
-export async function commitgen(
+function validateCommitMessages(
+  output: unknown,
+  count: number,
+  maxCharCount: number,
+): CommitMessage[] {
+  const ajv = new Ajv.default();
+  const validate = ajv.compile(commitMessagesSchema({ count, maxCharCount }));
+  if (!validate(output)) {
+    throw new Error(
+      "Response did not match schema: " + JSON.stringify(validate.errors),
+    );
+  }
+  return (output as CommitMessage[]).slice(0, count);
+}
+
+/**
+ * Commit message generation via OpenAI Responses API.
+ *
+ * Uses tiktoken for token counting and vector stores for large diffs.
+ * This is the default path when `baseURL` is not set.
+ */
+async function commitgenViaResponses(
   options: CommitgenOptions,
+  diff: string,
+  maxCharCount: number,
 ): Promise<CommitMessage[]> {
-  const model = options.model;
-  const maxCharCount = options.maxCharCount ?? DEFAULT_MAX_CHAR_COUNT;
+  // Cast to satisfy tiktoken's TiktokenModel type (only used in this path)
+  const model = options.model as TiktokenModel & OpenAI.ResponsesModel;
 
   function countTokens(text: string): number {
     const enc = encoding_for_model(model);
@@ -152,14 +187,6 @@ export async function commitgen(
     } finally {
       enc.free();
     }
-  }
-
-  // Get staged diff
-  const diff = await getStagedDiff(options.cwd);
-  if (!diff) {
-    throw new Error(
-      "No staged changes other than whitespace found. Have you only formatted the code?",
-    );
   }
 
   const openai = new OpenAI({
@@ -201,8 +228,9 @@ export async function commitgen(
           const fileList = await openai.vectorStores.files.list(
             newAttachments.vectorStoreId,
           );
-          const fileEntry = fileList.data.find((f) =>
-            f.id === newAttachments.fileId
+          const fileEntry = fileList.data.find(
+            (f: { id: string; status?: string }) =>
+              f.id === newAttachments.fileId,
           );
           fileStatus = fileEntry?.status || "";
           if (fileStatus === "completed") break;
@@ -243,7 +271,7 @@ export async function commitgen(
         parameters: {
           type: "object",
           properties: {
-            args: commitMessagesSchema({count: options.count, maxCharCount}),
+            args: commitMessagesSchema({ count: options.count, maxCharCount }),
           },
           required: ["args"],
           additionalProperties: false,
@@ -261,24 +289,15 @@ export async function commitgen(
       tools,
     });
 
-    const outputs = response.output.filter((i) => i.type === "function_call")
-      .map(
-        (i) => i.arguments,
-      );
+    const outputs = response.output.filter(
+      (i: { type: string; arguments?: string }) => i.type === "function_call",
+    ).map(
+      (i: { type: string; arguments?: string }) => i.arguments,
+    );
 
-    const output = outputs.flatMap((i) => JSON.parse(i)?.args ?? []);
+    const output = outputs.flatMap((i: string) => JSON.parse(i)?.args ?? []);
 
-    // Validate output
-    const ajv = new Ajv.default();
-    const validate = ajv.compile(commitMessagesSchema({count: options.count, maxCharCount}));
-    if (!validate(output)) {
-      throw new Error(
-        "OpenAI response did not match schema: " +
-          JSON.stringify(validate.errors),
-      );
-    }
-
-    return output.slice(0, options.count);
+    return validateCommitMessages(output, options.count, maxCharCount);
   } finally {
     if (attachments) {
       try {
@@ -293,6 +312,119 @@ export async function commitgen(
       }
     }
   }
+}
+
+/**
+ * Commit message generation via Chat Completions API.
+ *
+ * Used when `baseURL` is set (e.g. for OpenRouter). Sends the diff inline
+ * (no vector store / file upload). Uses function calling for structured output
+ * with a fallback to parsing JSON content.
+ */
+async function commitgenViaChatCompletions(
+  options: CommitgenOptions,
+  diff: string,
+  maxCharCount: number,
+): Promise<CommitMessage[]> {
+  const size = new TextEncoder().encode(diff).length;
+  if (size > requestDiffSizeLimit) {
+    throw new Error(
+      `Diff size (${size} bytes) exceeds the limit of ${requestDiffSizeLimit} bytes.`,
+    );
+  }
+
+  const openai = new OpenAI({
+    apiKey: options.apiKey,
+    baseURL: options.baseURL,
+  });
+
+  const instructions =
+    `You are a commit message generator. Given the following git diff, propose commit message candidates as a function call.\n` +
+    `Each commit message MUST represent the COMPLETE change by itself. It is not acceptable to mention only part of the change.\n` +
+    `Each commit message MUST be no more than ${maxCharCount} characters (excluding the Conventional Commit type tag).`;
+
+  const response = await openai.chat.completions.create({
+    model: options.model,
+    messages: [
+      { role: "system", content: instructions },
+      {
+        role: "user",
+        content:
+          `Please analyze the diff and generate ${options.count} commit message candidates.\n\n` +
+          "```diff\n" + diff + "\n```",
+      },
+    ],
+    tools: [{
+      type: "function",
+      function: {
+        name: "propose_commit_message",
+        description:
+          `Propose commit messages for a git diff, separating the conventional commit type and the message content. Each message must be no more than ${maxCharCount} characters (excluding the Conventional Commit type tag).`,
+        parameters: {
+          type: "object",
+          properties: {
+            args: commitMessagesSchema({ count: options.count, maxCharCount }),
+          },
+          required: ["args"],
+          additionalProperties: false,
+        },
+      },
+    }],
+    tool_choice: {
+      type: "function",
+      function: { name: "propose_commit_message" },
+    },
+  });
+
+  const choice = response.choices[0];
+  if (!choice) {
+    throw new Error("No response choices returned.");
+  }
+
+  // Extract commit messages from function call (or fallback to content)
+  let output: unknown;
+  const toolCall = choice.message?.tool_calls?.[0];
+  if (toolCall?.function?.arguments) {
+    const parsed = JSON.parse(toolCall.function.arguments);
+    output = parsed?.args ?? parsed;
+  } else if (choice.message?.content) {
+    // Fallback: try to parse the message content as JSON
+    output = JSON.parse(choice.message.content);
+  } else {
+    throw new Error("No commit message candidates found in the response.");
+  }
+
+  return validateCommitMessages(output, options.count, maxCharCount);
+}
+
+/**
+ * Generates commit message candidates based on the staged git diff.
+ *
+ * Uses the OpenAI Responses API by default. When `options.baseURL` is set,
+ * falls back to the Chat Completions API for compatibility with OpenAI-compatible
+ * providers like OpenRouter.
+ *
+ * @param {CommitgenOptions} options - The options for commit message generation.
+ * @returns {Promise<CommitMessage[]>} - A promise that resolves to an array of commit message candidates.
+ * @throws {Error} - Throws if there are no staged changes, the diff is too large, or the response is invalid.
+ */
+export async function commitgen(
+  options: CommitgenOptions,
+): Promise<CommitMessage[]> {
+  const maxCharCount = options.maxCharCount ?? DEFAULT_MAX_CHAR_COUNT;
+
+  // Get staged diff
+  const diff = await getStagedDiff(options.cwd);
+  if (!diff) {
+    throw new Error(
+      "No staged changes other than whitespace found. Have you only formatted the code?",
+    );
+  }
+
+  if (options.baseURL) {
+    return commitgenViaChatCompletions(options, diff, maxCharCount);
+  }
+  return commitgenViaResponses(options, diff, maxCharCount);
 }
 
 export default commitgen;
