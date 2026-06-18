@@ -8,42 +8,104 @@ staged diff and proposes commit messages that follow the
 [Conventional Commits](https://www.conventionalcommits.org/) specification.
 
 For large diffs, a **Map-Reduce** strategy is used: the diff is chunked by file
-boundary, each chunk is summarized individually, and the summaries are synthesized
-into final commit messages. This works with any Chat Completions API provider —
-no vector store required.
+boundary, each chunk is summarized individually, and the summaries are
+synthesized into final commit messages. This works with any Chat Completions API
+provider — no vector store required.
 
 ---
 
-## Features
+## Install
 
-- **AI-powered commit message generation** for staged git diffs
-- **Conventional Commits** support (feat, fix, docs, etc.)
-- **Map-Reduce** for large diffs (inline for small diffs)
-- **Progress reporting** via `AsyncGenerator` events
-- **OpenAI-compatible**: works with OpenAI, OpenRouter, and any compatible endpoint
-- **Schema validation** for output
+### CLI
 
----
+```sh
+deno install -gF commitgen jsr:@gw31415/commitgen/cli
+```
 
-## Requirements
+### Library
 
-- [Git](https://git-scm.com/) (must be in your PATH)
-- [Deno](https://deno.land/) v2.0+
-- Staged changes in a git repository
+```sh
+deno add jsr:@gw31415/commitgen
+```
 
 ---
 
-## Usage Example
+## CLI Usage
+
+```sh
+commitgen [options]
+```
+
+### Options
+
+| Flag          | Short | Default              | Description                                |
+| ------------- | ----- | -------------------- | ------------------------------------------ |
+| `--model`     | `-m`  | `gpt-5.1-codex-mini` | Model name                                 |
+| `--count`     | `-n`  | `3`                  | Number of candidates                       |
+| `--api-key`   | `-k`  | (read from `$OPENAI_API_KEY`)    | API key                                    |
+| `--base-url`  | `-u`  | (read from `$OPENAI_BASE_URL`)   | OpenAI-compatible base URL                 |
+| `--max-chars` | `-c`  | `40`                 | Max chars per message (excluding type tag) |
+| `--help`      | `-h`  | —                    | Show help                                  |
+| `--version`   | `-V`  | —                    | Show version                               |
+
+**Positional argument:**
+
+| Argument | Default          | Description           |
+| -------- | ---------------- | --------------------- |
+| `[cwd]`  | current directory | Git repository path  |
+
+### Examples
+
+```sh
+# Use defaults
+commitgen
+
+# 5 candidates with OpenRouter
+commitgen -n 5 -m anthropic/claude-sonnet-4 -u https://openrouter.ai/api/v1
+
+# Custom API key
+commitgen -k sk-xxx
+```
+
+### Config File
+
+`~/.config/commitgen/config.toml` — set user defaults so you don't repeat CLI
+flags every time.
+
+```toml
+model     = "anthropic/claude-sonnet-4"
+count     = 5
+max_chars = 50
+api_key   = "sk-..."               # plain text — prefer env vars
+base_url  = "https://openrouter.ai/api/v1"
+
+[env]
+api_key  = "OPENROUTER_API_KEY"    # read API key from this env var instead
+base_url = "OPENROUTER_BASE_URL"   # read base URL from this env var instead
+```
+
+**Priority** (highest to lowest):
+
+1. CLI flags
+2. Environment variables (names configurable via `[env]`)
+3. Config file
+4. Built-in defaults
+
+---
+
+## Library Usage
 
 ```ts
 import { commitgen } from "jsr:@gw31415/commitgen";
 
-for await (const event of commitgen({
-  count: 3,                  // Number of commit message candidates
-  cwd: Deno.cwd(),          // Path to your git repo
-  model: "gpt-4o",          // Any model name
-  apiKey: "sk-xxx...xxxx",  // Default: process.env["OPENAI_API_KEY"]
-})) {
+for await (
+  const event of commitgen({
+    count: 3, // Number of commit message candidates
+    cwd: Deno.cwd(), // Path to your git repo
+    model: "gpt-4o", // Any model name
+    apiKey: "sk-xxx...xxxx", // Default: process.env["OPENAI_API_KEY"]
+  })
+) {
   if (event.type === "result") {
     console.log(event.messages);
     // [
@@ -59,13 +121,15 @@ for await (const event of commitgen({
 ### OpenRouter
 
 ```ts
-for await (const event of commitgen({
-  count: 5,
-  cwd: Deno.cwd(),
-  model: "anthropic/claude-sonnet-4",
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: "sk-or-...",
-})) {
+for await (
+  const event of commitgen({
+    count: 5,
+    cwd: Deno.cwd(),
+    model: "anthropic/claude-sonnet-4",
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: "sk-or-...",
+  })
+) {
   if (event.type === "result") {
     console.log(event.messages);
   }
@@ -74,12 +138,12 @@ for await (const event of commitgen({
 
 ### Events
 
-| Event | When | Fields |
-|---|---|---|
-| `info` | Start of generation | `diffBytes`, `strategy` (`"inline"` or `"map-reduce"`), `chunkCount` |
-| `map_progress` | After each chunk is summarized (Map-Reduce only) | `current`, `total` |
-| `reduce_start` | Before synthesis (Map-Reduce only) | — |
-| `result` | Final result | `messages: CommitMessage[]` |
+| Event          | When                                             | Fields                                                               |
+| -------------- | ------------------------------------------------ | -------------------------------------------------------------------- |
+| `info`         | Start of generation                              | `diffBytes`, `strategy` (`"inline"` or `"map-reduce"`), `chunkCount` |
+| `map_progress` | After each chunk is summarized (Map-Reduce only) | `current`, `total`                                                   |
+| `reduce_start` | Before synthesis (Map-Reduce only)               | —                                                                    |
+| `result`       | Final result                                     | `messages: CommitMessage[]`                                          |
 
 ---
 
@@ -97,6 +161,14 @@ for await (const event of commitgen({
 - `ci`: Changes to CI configuration files and scripts
 - `chore`: Other changes that don't modify src or test files
 - `revert`: Reverts a previous commit
+
+---
+
+## Requirements
+
+- [Git](https://git-scm.com/) (must be in your PATH)
+- [Deno](https://deno.land/) v2.0+
+- Staged changes in a git repository
 
 ---
 

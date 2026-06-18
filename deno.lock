@@ -7,7 +7,12 @@
     "jsr:@cross/runtime@1": "1.1.0",
     "jsr:@cross/utils@0.16": "0.16.0",
     "jsr:@openai/openai@^5.7.0": "5.7.0",
+    "jsr:@std/cli@1": "1.0.30",
+    "jsr:@std/collections@^1.1.3": "1.2.0",
+    "jsr:@std/internal@^1.0.14": "1.0.14",
+    "jsr:@std/path@1": "1.1.0",
     "jsr:@std/path@^1.0.8": "1.1.0",
+    "jsr:@std/toml@1": "1.0.11",
     "npm:@types/node@*": "22.13.10",
     "npm:ajv@^8.17.1": "8.17.1",
     "npm:zod@3": "3.24.2"
@@ -28,7 +33,7 @@
       "dependencies": [
         "jsr:@cross/env",
         "jsr:@cross/runtime",
-        "jsr:@std/path"
+        "jsr:@std/path@^1.0.8"
       ]
     },
     "@cross/runtime@1.1.0": {
@@ -47,8 +52,26 @@
         "npm:zod"
       ]
     },
+    "@std/cli@1.0.30": {
+      "integrity": "769446536522d0417d7127ebcabcafac1ab0ce6766d0eb3fca1d36326fe98d13",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
+    },
+    "@std/collections@1.2.0": {
+      "integrity": "47627a21d3a13138b77fd0e4d790ba9d2e603c3510b686cde6b132fe9aa98a88"
+    },
+    "@std/internal@1.0.14": {
+      "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
+    },
     "@std/path@1.1.0": {
       "integrity": "ddc94f8e3c275627281cbc23341df6b8bcc874d70374f75fec2533521e3d6886"
+    },
+    "@std/toml@1.0.11": {
+      "integrity": "e084988b872ca4bad6aedfb7350f6eeed0e8ba88e9ee5e1590621c5b5bb8f715",
+      "dependencies": [
+        "jsr:@std/collections"
+      ]
     }
   },
   "npm": {
@@ -90,6 +113,9 @@
     "dependencies": [
       "jsr:@cross/utils@0.16",
       "jsr:@openai/openai@^5.7.0",
+      "jsr:@std/cli@1",
+      "jsr:@std/path@1",
+      "jsr:@std/toml@1",
       "npm:ajv@^8.17.1"
     ]
   }

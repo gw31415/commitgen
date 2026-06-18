@@ -7,10 +7,16 @@
     "useTabs": false
   },
   "name": "@gw31415/commitgen",
-  "exports": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./cli": "./cli.ts"
+  },
   "imports": {
     "@cross/utils": "jsr:@cross/utils@^0.16.0",
     "@openai/openai": "jsr:@openai/openai@^5.7.0",
+    "@std/cli": "jsr:@std/cli@^1.0.0",
+    "@std/path": "jsr:@std/path@^1.0.0",
+    "@std/toml": "jsr:@std/toml@^1.0.0",
     "ajv": "npm:ajv@^8.17.1"
   }
 }
