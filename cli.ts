@@ -34,7 +34,7 @@ interface ConfigFile {
 // Constants
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 
 const DEFAULT_MODEL = "gpt-5.1-codex-mini";
 const DEFAULT_COUNT = 3;
@@ -222,7 +222,7 @@ function progressBar(current: number, total: number, width = 10): string {
  * as plain lines instead, so logs stay clean.
  */
 class ProgressDisplay {
-  private intervalId?: number;
+  private intervalId?: ReturnType<typeof setInterval>;
   private frame = 0;
   private spinnerMsg = "";
   private readonly isTTY: boolean;
