@@ -1,0 +1,61 @@
+name: Build Binaries
+
+# Cross-compiles commitgen into standalone binaries for all Deno-supported
+# targets on a single ubuntu runner, then attaches them to the GitHub Release.
+# Runs in parallel with publish.yml (JSR) on release creation.
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write # required to upload assets to the release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }} # the tag that triggered the release
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Build for all targets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Every target supported by `deno compile` (see `deno compile --help`).
+          targets=(
+            x86_64-unknown-linux-gnu
+            aarch64-unknown-linux-gnu
+            x86_64-pc-windows-msvc
+            x86_64-apple-darwin
+            aarch64-apple-darwin
+          )
+          for target in "${targets[@]}"; do
+            echo "::group::Compiling $target"
+            # Deno auto-appends `.exe` for Windows targets.
+            deno compile -A --target "$target" -o "dist/commitgen-$target" cli.ts
+            echo "::endgroup::"
+          done
+
+      - name: Smoke test (native binary)
+        run: |
+          ./dist/commitgen-x86_64-unknown-linux-gnu --version
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
