@@ -180,6 +180,126 @@ function buildHelp(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Rich progress output (stderr)
+// ---------------------------------------------------------------------------
+
+/** ANSI escape sequences for colored stderr output. */
+const c = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  red: "\x1b[31m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  cyan: "\x1b[36m",
+} as const;
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/** Formats a byte count as a human-readable string (e.g. `12.3 KB`). */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Renders a compact progress bar string. */
+function progressBar(current: number, total: number, width = 10): string {
+  const filled = total > 0 ? Math.round((current / total) * width) : 0;
+  return `${c.cyan}${"█".repeat(filled)}${c.dim}${
+    "░".repeat(width - filled)
+  }${c.reset}`;
+}
+
+/**
+ * Streaming progress display written to stderr.
+ *
+ * Each visible transition is driven by a {@link CommitgenEvent} yielded from
+ * the `commitgen()` async generator, while an animated spinner ticks during the
+ * async gaps between yields — making the generator's streaming nature visible.
+ *
+ * On a non-TTY stderr the animation is suppressed and phase changes are emitted
+ * as plain lines instead, so logs stay clean.
+ */
+class ProgressDisplay {
+  private intervalId?: number;
+  private frame = 0;
+  private spinnerMsg = "";
+  private readonly isTTY: boolean;
+  private readonly encoder = new TextEncoder();
+
+  constructor() {
+    this.isTTY = Deno.stderr.isTerminal();
+  }
+
+  private write(msg: string): void {
+    Deno.stderr.writeSync(this.encoder.encode(msg));
+  }
+
+  private renderSpinner(): void {
+    const f = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length];
+    this.write(
+      `\r\x1b[K${c.yellow}${f}${c.reset} ${c.dim}${this.spinnerMsg}${c.reset}`,
+    );
+  }
+
+  /** Prints a persistent line (kept above any running spinner). */
+  line(msg: string): void {
+    if (this.isTTY && this.intervalId !== undefined) {
+      this.write(`\r\x1b[K${msg}\n`);
+      this.renderSpinner();
+    } else {
+      this.write(`${msg}\n`);
+    }
+  }
+
+  /** Begins an animated spinner (TTY) or emits the message once (non-TTY). */
+  startSpinner(msg: string): void {
+    this.spinnerMsg = msg;
+    if (!this.isTTY) {
+      this.write(`${msg}\n`);
+      return;
+    }
+    this.renderSpinner();
+    this.intervalId = setInterval(() => {
+      this.frame++;
+      this.renderSpinner();
+    }, 80);
+  }
+
+  /** Updates the spinner's label live without breaking the animation. */
+  updateSpinner(msg: string): void {
+    if (msg === this.spinnerMsg) return;
+    this.spinnerMsg = msg;
+    if (!this.isTTY) {
+      this.write(`${msg}\n`);
+      return;
+    }
+    this.renderSpinner();
+  }
+
+  /** Stops the spinner and prints a final success/failure line. */
+  finish(success: boolean, msg: string): void {
+    if (this.intervalId !== undefined) {
+      clearInterval(this.intervalId);
+      this.intervalId = undefined;
+    }
+    if (this.isTTY) this.write(`\r\x1b[K`);
+    const icon = success ? `${c.green}✓${c.reset}` : `${c.red}✗${c.reset}`;
+    this.write(`${icon} ${msg}\n`);
+  }
+
+  /** Stops any running animation; wipes the spinner line on error paths. */
+  close(): void {
+    if (this.intervalId !== undefined) {
+      clearInterval(this.intervalId);
+      this.intervalId = undefined;
+      if (this.isTTY) this.write(`\r\x1b[K`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -214,18 +334,61 @@ async function main(): Promise<void> {
     const config = loadConfig();
     const options = resolveOptions(args, config);
 
-    for await (const event of commitgen(options)) {
-      if (event.type === "result") {
-        for (const msg of event.messages) {
-          console.log(`${msg.conventionalCommitType}: ${msg.commitMsgContent}`);
+    const progress = new ProgressDisplay();
+    try {
+      for await (const event of commitgen(options)) {
+        switch (event.type) {
+          case "info": {
+            const detail = event.strategy === "map-reduce"
+              ? `${event.strategy} · ${event.chunkCount} chunks`
+              : event.strategy;
+            progress.line(
+              `${c.cyan}◆${c.reset} Staged diff ${c.bold}${
+                formatBytes(event.diffBytes)
+              }${c.reset} ${c.dim}— ${detail}${c.reset}`,
+            );
+            progress.startSpinner(
+              event.strategy === "map-reduce"
+                ? `Mapping ${
+                  progressBar(0, event.chunkCount)
+                } 0/${event.chunkCount}`
+                : "Generating commit messages",
+            );
+            break;
+          }
+          case "map_progress":
+            progress.updateSpinner(
+              `Mapping ${
+                progressBar(event.current, event.total)
+              } ${event.current}/${event.total}`,
+            );
+            break;
+          case "reduce_start":
+            progress.updateSpinner("Reducing summaries → commit messages");
+            break;
+          case "result": {
+            const n = event.messages.length;
+            progress.finish(
+              true,
+              `Generated ${c.bold}${n}${c.reset} candidate${
+                n === 1 ? "" : "s"
+              }`,
+            );
+            for (const msg of event.messages) {
+              console.log(
+                `${msg.conventionalCommitType}: ${msg.commitMsgContent}`,
+              );
+            }
+            break;
+          }
         }
       }
-      // Progress events (info, map_progress, reduce_start) are silently
-      // ignored. A progress display will be added in a future version.
+    } finally {
+      progress.close();
     }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    console.error(`Error: ${message}`);
+    console.error(`${c.red}✗${c.reset} Error: ${message}`);
     Deno.exit(1);
   }
 }

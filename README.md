@@ -67,6 +67,21 @@ commitgen -n 5 -m anthropic/claude-sonnet-4 -u https://openrouter.ai/api/v1
 commitgen -k sk-xxx
 ```
 
+### Output streams
+
+Commit message candidates are written to **stdout** (one per line as
+`type: message`), so they can be piped or redirected. A rich, animated
+**progress display** — diff size, strategy, a live progress bar for the Map
+phase, and a spinner — is written to **stderr**, driven by the events yielded by
+the async generator. The animation is suppressed automatically when stderr is
+not a TTY (e.g. in logs or CI), where phase changes are emitted as plain lines
+instead.
+
+```sh
+# pipe only the commit messages; progress still shows on the terminal
+commitgen | head -n 1 | git commit -F -
+```
+
 ### Config File
 
 `~/.config/commitgen/config.toml` — set user defaults so you don't repeat CLI
