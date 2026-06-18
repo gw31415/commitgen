@@ -34,7 +34,7 @@ interface ConfigFile {
 // Constants
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 
 const DEFAULT_MODEL = "gpt-5.1-codex-mini";
 const DEFAULT_COUNT = 3;
